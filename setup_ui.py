@@ -19,7 +19,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 # ══════════════════ EDIT ONLY THIS BLOCK FOR A NEW PROGRAM ══════════════════
 APP = "EyeGuard"                       # program name: shown in the UI, Program Files folder, log names
 EXE_NAME = "EyeGuard.exe"              # the installed program's exe
-APP_VERSION = "1.2.55"
+APP_VERSION = "1.0.0"
 UNINSTALL_KEY = APP
 CONFIG_DIR_NAME = "EyeGuard"           # %APPDATA%\<this>\config.json may hold {"theme": "emerald"} (accent color)
 DEFAULT_THEME = "amber"                # emerald | indigo | cyan | violet | rose | amber

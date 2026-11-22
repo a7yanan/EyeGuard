@@ -1,57 +1,85 @@
 @echo off
-chcp 65001 >nul
 setlocal EnableExtensions
 cd /d "%~dp0"
-set "PY=python"
+
+set "PYTHON="
+where py >nul 2>&1
+if not errorlevel 1 (
+    py -3 --version >nul 2>&1
+    if not errorlevel 1 set "PYTHON=py -3"
+)
+if not defined PYTHON (
+    where python >nul 2>&1
+    if not errorlevel 1 (
+        python --version >nul 2>&1
+        if not errorlevel 1 set "PYTHON=python"
+    )
+)
+
+if not defined PYTHON goto no_python
 
 echo [1/5] Checking Python...
-%PY% --version >nul 2>&1
+%PYTHON% --version
+if errorlevel 1 goto failed
+
+echo [2/5] Checking required packages...
+%PYTHON% -m pip --version >nul 2>&1
 if errorlevel 1 (
-    echo [!] Python was not found. Install Python 3 and tick "Add python.exe to PATH".
-    goto fail
+    echo Installing pip...
+    %PYTHON% -m ensurepip --upgrade
+    if errorlevel 1 goto failed
+)
+%PYTHON% -m pip show Pillow >nul 2>&1
+if errorlevel 1 (
+    echo Installing Pillow...
+    %PYTHON% -m pip install Pillow
+    if errorlevel 1 goto failed
+)
+%PYTHON% -m pip show pyinstaller >nul 2>&1
+if errorlevel 1 (
+    echo Installing PyInstaller...
+    %PYTHON% -m pip install PyInstaller
+    if errorlevel 1 goto failed
 )
 
-echo [2/5] Checking libraries (installed only if missing)...
-%PY% -m pip show Pillow >nul 2>&1
-if errorlevel 1 (
-    echo     Installing Pillow...
-    %PY% -m pip install Pillow || goto fail
-)
-%PY% -m pip show pyinstaller >nul 2>&1
-if errorlevel 1 (
-    echo     Installing PyInstaller...
-    %PY% -m pip install pyinstaller || goto fail
-)
+echo [3/5] Creating icons and building EyeGuard...
+%PYTHON% make_icon.py
+if errorlevel 1 goto failed
+%PYTHON% -m PyInstaller --noconsole --onefile --clean --name EyeGuard --icon app.ico --hidden-import cities --add-data "app.ico;." --add-data "logo.png;." --add-data "tray_on.ico;." --add-data "tray_off.ico;." eyeguard.py
+if errorlevel 1 goto failed
+copy /y "dist\EyeGuard.exe" "dist\EyeGuard.portable.exe" >nul
+if errorlevel 1 goto failed
 
-echo [3/5] Creating icons and building EyeGuard.exe...
-%PY% make_icon.py || goto fail
-%PY% -m PyInstaller --noconsole --onefile --clean --name EyeGuard --icon app.ico --hidden-import cities --add-data "app.ico;." --add-data "logo.png;." --add-data "tray_on.ico;." --add-data "tray_off.ico;." eyeguard.py || goto fail
+echo [4/5] Building the installer...
+%PYTHON% -m PyInstaller --noconsole --onefile --uac-admin --name EyeGuard_Setup --icon app.ico --hidden-import PIL._tkinter_finder --add-data "logo.png;." --add-data "app.ico;." --add-data "dist\EyeGuard.exe;." setup_ui.py
+if errorlevel 1 goto failed
 
-echo [4/5] Building the setup window (with the program inside)...
-%PY% -m PyInstaller --noconsole --onefile --uac-admin --name EyeGuard_Setup --icon app.ico --hidden-import PIL._tkinter_finder --add-data "logo.png;." --add-data "app.ico;." --add-data "dist\EyeGuard.exe;." setup_ui.py
-if errorlevel 1 (
-    echo [!] The setup window could not be built. Send the messages above to the developer.
-    goto fail
-)
-
-echo [5/5] Cleaning up...
+echo [5/5] Cleaning temporary build files...
 rmdir /s /q build 2>nul
 del /q EyeGuard.spec EyeGuard_Setup.spec 2>nul
-if not exist "dist\EyeGuard_Setup.exe" (
-    echo [!] The installer file was not created.
-    goto fail
-)
+if not exist "dist\EyeGuard_Setup.exe" goto failed
 
 echo.
-echo ==============================================
-echo تم! المثبت جاهز: dist\EyeGuard_Setup.exe
-echo ==============================================
+echo Build completed successfully.
+echo Installer: dist\EyeGuard_Setup.exe
+echo Portable:  dist\EyeGuard.portable.exe
 echo.
 pause
 exit /b 0
 
-:fail
+:no_python
 echo.
-echo [!] Build stopped. Read the message above, fix it, then run build.bat again.
+echo ERROR: Python 3 was not found on this computer.
+echo Install Python 3 from https://www.python.org/downloads/windows/
+echo During installation, enable the option: Add python.exe to PATH.
+echo Then close this window, open a new Command Prompt, and run build.bat again.
+echo.
+pause
+exit /b 1
+
+:failed
+echo.
+echo ERROR: Build failed. Read the error messages above.
+echo.
 pause
 exit /b 1

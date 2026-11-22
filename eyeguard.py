@@ -32,10 +32,9 @@ from cities import CITIES
 APP_NAME = "EyeGuard"
 APP_VERSION = "1.0.0"           # إصدار التطبيق
 AUTHOR_URL = "https://x.com/3omar_a7yanan"
-# GitHub Releases: الـ tag يكون v1 ثم v1.1 / v2… وملف المرفق EyeGuard.exe
-# هيتظبط لما تبعت لينك المستودع
-GITHUB_REPO = "3omar_a7yanan/EyeGuard"   # owner/repo
-UPDATE_ASSET = "EyeGuard.exe"
+# GitHub Releases: publish EyeGuard.portable.exe with each stable release.
+GITHUB_REPO = "a7yanan/EyeGuard"         # owner/repo
+UPDATE_ASSET = "EyeGuard.portable.exe"
 UPDATE_CHECK_HOURS = 24                  # مرة كل يوم
 
 ACCENT = "#f59e0b"
@@ -446,35 +445,49 @@ def download_update(url, dest_path):
             out.write(chunk)
 
 
-def apply_update_and_restart(new_exe_path):
-    """Replace the running exe after exit, then relaunch. Uses a short-lived .bat helper."""
+def apply_update_and_restart(new_exe_path, version):
+    """Elevate a PowerShell helper, replace the installed EXE, then relaunch."""
     if not is_frozen():
         return False
-    current = os.path.abspath(sys.executable)
-    folder = os.path.dirname(current)
-    helper = os.path.join(os.environ.get("TEMP") or folder, "EyeGuard_update.bat")
-    # Wait for this process to exit, then move the new file over the old one and start it
-    lines = [
-        "@echo off",
-        "chcp 65001 >nul",
-        "setlocal",
-        "set \"TARGET=%s\"" % current.replace("%", "%%"),
-        "set \"NEW=%s\"" % new_exe_path.replace("%", "%%"),
-        ":wait",
-        "timeout /t 1 /nobreak >nul",
-        "del \"%TARGET%\" >nul 2>&1",
-        "if exist \"%TARGET%\" goto wait",
-        "move /y \"%NEW%\" \"%TARGET%\" >nul",
-        "start \"\" \"%TARGET%\"",
-        "del \"%~f0\" >nul 2>&1",
-    ]
-    with open(helper, "w", encoding="utf-8") as f:
-        f.write("\r\n".join(lines) + "\r\n")
-    subprocess.Popen(["cmd.exe", "/c", helper],
-                     close_fds=True,
-                     creationflags=0x00000008 | 0x00000200)  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    return True
 
+    current = os.path.abspath(sys.executable)
+    helper = os.path.join(os.environ.get("TEMP") or os.path.dirname(current),
+                          "EyeGuard_update.ps1")
+    pid = os.getpid()
+    ps = r"""$ErrorActionPreference = 'Stop'
+$target = __TARGET__
+$newFile = __NEWFILE__
+$processId = __PID__
+$version = __VERSION__
+try {
+    Wait-Process -Id $processId
+    Start-Sleep -Milliseconds 700
+    Copy-Item -LiteralPath $newFile -Destination $target -Force
+    try {
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\EyeGuard' -Name DisplayVersion -Value $version -ErrorAction Stop
+    } catch {}
+    Start-Process -FilePath $target
+    Remove-Item -LiteralPath $newFile -Force -ErrorAction SilentlyContinue
+} catch {
+    $_ | Out-String | Set-Content -LiteralPath (Join-Path $env:TEMP 'EyeGuard_update_error.txt')
+}
+Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+"""
+    def ps_quote(value):
+        return "'" + str(value).replace("'", "''") + "'"
+    ps = (ps.replace('__TARGET__', ps_quote(current))
+            .replace('__NEWFILE__', ps_quote(os.path.abspath(new_exe_path)))
+            .replace('__PID__', str(pid))
+            .replace('__VERSION__', ps_quote(version)))
+    try:
+        with open(helper, "w", encoding="utf-8") as f:
+            f.write(ps)
+        args = '-NoProfile -ExecutionPolicy Bypass -File "' + helper + '"'
+        result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "powershell.exe", args, None, 0)
+        return int(result) > 32
+    except Exception as e:
+        log("could not launch elevated updater: %r" % (e,))
+        return False
 
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
@@ -3352,7 +3365,7 @@ class App:
                 dest = os.path.join(os.environ.get("TEMP") or CONFIG_DIR,
                                     "EyeGuard_%s.exe" % ver)
                 download_update(info["url"], dest)
-                if apply_update_and_restart(dest):
+                if apply_update_and_restart(dest, ver):
                     self.events.put(("exit", None))
                 else:
                     self.cfg["pending_update_note"] = ""
