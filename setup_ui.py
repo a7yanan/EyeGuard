@@ -926,6 +926,42 @@ def run_fallback():
         log("fallback install failed:\n" + traceback.format_exc())
 
 
+def run_silent_update():
+    """Called with --update: replace installed files without UI, then launch EyeGuard."""
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", EXE_NAME],
+            creationflags=CREATE_NO_WINDOW,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+    # Wait a moment so the old process fully releases file locks
+    time.sleep(1.2)
+    try:
+        install_files(False)
+        log("silent update finished")
+    except Exception:
+        log("silent update failed:\n" + traceback.format_exc())
+        try:
+            ctypes.windll.user32.MessageBoxW(
+                None,
+                "EyeGuard update failed. Please run the installer again.",
+                APP,
+                0x10,
+            )
+        except Exception:
+            pass
+        return
+    time.sleep(0.4)
+    try:
+        ctypes.windll.shell32.ShellExecuteW(None, "open", installed_exe(), None, None, 1)
+        log("launched after silent update: %s" % installed_exe())
+    except Exception as ex:
+        log("launch after silent update failed: %r" % ex)
+
+
 # ───────────────────────────── entry point ─────────────────────────────
 
 
@@ -933,6 +969,9 @@ def run_fallback():
 def main():
     if "--uninstall" in sys.argv:
         uninstall()
+        return
+    if "--update" in sys.argv or "--silent" in sys.argv:
+        run_silent_update()
         return
     app = None
     try:

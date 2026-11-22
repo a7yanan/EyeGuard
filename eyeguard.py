@@ -20,6 +20,8 @@ import time
 import subprocess
 import unicodedata
 import urllib.request
+import urllib.parse
+import re
 import tkinter as tk
 import tkinter.messagebox as mb
 import webbrowser
@@ -32,9 +34,14 @@ from cities import CITIES
 APP_NAME = "EyeGuard"
 APP_VERSION = "1.0.0"           # إصدار التطبيق
 AUTHOR_URL = "https://x.com/3omar_a7yanan"
-# GitHub Releases: publish EyeGuard.portable.exe with each stable release.
+# GitHub Releases: upload either EyeGuard.portable.exe (preferred for silent replace)
+# or an installer named EyeGuard_Setup*.exe / EyeGuard*Setup*.exe. The updater
+# picks the best available asset automatically.
 GITHUB_REPO = "a7yanan/EyeGuard"         # owner/repo
-UPDATE_ASSET = "EyeGuard.portable.exe"
+UPDATE_ASSET_PREFERRED = (
+    "EyeGuard.portable.exe",
+    "EyeGuard.exe",
+)
 UPDATE_CHECK_HOURS = 24                  # مرة كل يوم
 
 ACCENT = "#f59e0b"
@@ -117,10 +124,15 @@ STRINGS = {
         "auto_update": "تحديث تلقائي (مرة كل يوم)",
         "update_latest": "أنت على آخر نسخة (%s).",
         "update_fail": "مقدرناش نتحقق من التحديثات. اتأكد من النت.",
+        "update_checking": "في بحث عن تحديث شغال دلوقتي. استنى شوية.",
         "update_apply_fail": "التحميل تم بس التثبيت فشل. نزّل يدوي من GitHub.",
         "update_not_exe": "التحديث شغال بس على النسخة المثبتة (EyeGuard.exe).",
         "update_done": "تم تحديث EyeGuard إلى النسخة %s",
-        "update_started": "في نسخة جديدة — جاري التحديث في الخلفية...",
+        "update_started": "في نسخة جديدة (%s) — جاري التحميل...",
+        "update_downloading": "جاري التحميل... %d%%",
+        "update_ready": "التحديث جاهز",
+        "update_restart": "إعادة التشغيل",
+        "update_restart_q": "تم تحميل النسخة %s.\nهل تعيد تشغيل EyeGuard لتطبيق التحديث؟",
         "tip_on": "شغّال - %dK %s", "tip_paused": "مقفول", "tip_sched": "مقفول (برا الساعات المحددة)",
         "break_title": "تحريك العين", "break_text": "حرّك عينك شمال ويمين وفوق وتحت",
         "break_left": "باقي %d ثانية", "skip": "تخطي", "snooze": "أجّل 5 دقايق",
@@ -148,10 +160,15 @@ STRINGS = {
         "auto_update": "تحديث تلقائي (مرة كل يوم)",
         "update_latest": "أنت على أحدث إصدار (%s).",
         "update_fail": "تعذّر التحقق من التحديثات. تأكد من الاتصال بالإنترنت.",
+        "update_checking": "جارٍ التحقق من التحديثات بالفعل. انتظر لحظة.",
         "update_apply_fail": "تم التنزيل لكن فشل التثبيت. نزّله يدويًا من GitHub.",
         "update_not_exe": "التحديث يعمل فقط مع النسخة المثبتة (EyeGuard.exe).",
         "update_done": "تم تحديث EyeGuard إلى الإصدار %s",
-        "update_started": "يتوفر إصدار جديد — جارٍ التحديث في الخلفية...",
+        "update_started": "يتوفر إصدار جديد (%s) — جارٍ التحميل...",
+        "update_downloading": "جارٍ التحميل... %d%%",
+        "update_ready": "التحديث جاهز",
+        "update_restart": "إعادة التشغيل",
+        "update_restart_q": "تم تحميل الإصدار %s.\nهل تريد إعادة تشغيل EyeGuard لتطبيق التحديث؟",
         "tip_on": "مُفعَّل - %dK %s", "tip_paused": "متوقف مؤقتًا", "tip_sched": "متوقف (خارج الأوقات المحددة)",
         "break_title": "تحريك العين", "break_text": "حرّك عينيك يمينًا ويسارًا ثم لأعلى ولأسفل",
         "break_left": "متبقٍ %d ثانية", "skip": "تخطٍّ", "snooze": "أجّل 5 دقائق",
@@ -179,10 +196,15 @@ STRINGS = {
         "auto_update": "Auto-update (once a day)",
         "update_latest": "You are on the latest version (%s).",
         "update_fail": "Could not check for updates. Check your internet connection.",
+        "update_checking": "An update check is already in progress. Please wait a moment.",
         "update_apply_fail": "Download succeeded but install failed. Download manually from GitHub.",
         "update_not_exe": "Updates only work with the installed build (EyeGuard.exe).",
         "update_done": "EyeGuard was updated to version %s",
-        "update_started": "A new version is available — updating in the background...",
+        "update_started": "A new version (%s) is available — downloading...",
+        "update_downloading": "Downloading... %d%%",
+        "update_ready": "Update ready",
+        "update_restart": "Restart",
+        "update_restart_q": "Version %s has been downloaded.\nRestart EyeGuard to apply the update?",
         "tip_on": "ON - %dK %s", "tip_paused": "Paused", "tip_sched": "Off (outside scheduled hours)",
         "break_title": "Eye movement", "break_text": "Move your eyes left, right, up and down.",
         "break_left": "Done in %d s", "skip": "Skip", "snooze": "Snooze 5 min",
@@ -400,56 +422,185 @@ def _parse_version(text):
     return tuple(parts[:4])
 
 
+def _pick_release_asset(assets):
+    """Choose the best downloadable .exe from a GitHub release assets list.
+    Priority: exact preferred names → Setup installer → any EyeGuard*.exe."""
+    if not assets:
+        return None, None
+    by_lower = {}
+    for asset in assets:
+        name = str(asset.get("name") or "").strip()
+        if not name:
+            continue
+        url = str(asset.get("browser_download_url") or "").strip()
+        if not url:
+            continue
+        by_lower[name.lower()] = (name, url)
+
+    for preferred in UPDATE_ASSET_PREFERRED:
+        hit = by_lower.get(preferred.lower())
+        if hit:
+            return hit
+
+    # Prefer an installer (EyeGuard_Setup*.exe / EyeGuard*Setup*.exe)
+    setup_re = re.compile(r"(?i)^eyeguard.*setup.*\.exe$")
+    for name_l, (name, url) in by_lower.items():
+        if setup_re.match(name):
+            return name, url
+
+    # Any other EyeGuard*.exe as last resort
+    any_re = re.compile(r"(?i)^eyeguard.*\.exe$")
+    for name_l, (name, url) in by_lower.items():
+        if any_re.match(name):
+            return name, url
+    return None, None
+
+
 def fetch_latest_release():
-    """GitHub latest release. Returns dict {version, tag, url, notes} or raises."""
+    """Find the latest public GitHub release, with a browser-page fallback."""
     api = "https://api.github.com/repos/%s/releases/latest" % GITHUB_REPO
-    req = urllib.request.Request(api, headers={
+    headers = {
         "User-Agent": "EyeGuard/" + APP_VERSION,
         "Accept": "application/vnd.github+json",
-    })
-    with urllib.request.urlopen(req, timeout=12) as r:
-        data = json.loads(r.read().decode("utf-8", "replace"))
-    tag = str(data.get("tag_name") or "")
-    ver = tag.lstrip("vV")
-    url = ""
-    for asset in data.get("assets") or []:
-        name = str(asset.get("name") or "")
-        if name.lower() == UPDATE_ASSET.lower():
-            url = str(asset.get("browser_download_url") or "")
-            break
-    if not url:
-        # fallback: any .exe
-        for asset in data.get("assets") or []:
-            name = str(asset.get("name") or "").lower()
-            if name.endswith(".exe") and "setup" not in name:
-                url = str(asset.get("browser_download_url") or "")
-                break
-    if not ver or not url:
-        raise RuntimeError("no suitable release asset")
-    return {
-        "version": ver,
-        "tag": tag,
-        "url": url,
-        "notes": str(data.get("body") or ""),
-        "html_url": str(data.get("html_url") or ""),
     }
+    api_error = None
+    try:
+        req = urllib.request.Request(api, headers=headers)
+        with urllib.request.urlopen(req, timeout=12) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+        tag = str(data.get("tag_name") or "").strip()
+        ver = tag.lstrip("vV")
+        name, url = _pick_release_asset(data.get("assets") or [])
+        if tag and ver and url:
+            return {
+                "version": ver, "tag": tag, "url": url,
+                "asset_name": name or "",
+                "notes": str(data.get("body") or ""),
+                "html_url": str(data.get("html_url") or ""),
+            }
+        api_error = "no suitable release asset (looked for portable, EyeGuard.exe, or Setup)"
+    except Exception as e:
+        api_error = "%s: %s" % (type(e).__name__, e)
+        log("GitHub API update lookup failed: %s" % api_error)
+
+    # Some networks/security products block api.github.com while github.com works.
+    # Resolve the /releases/latest redirect to discover the current tag without the API.
+    try:
+        page_url = "https://github.com/%s/releases/latest" % GITHUB_REPO
+        req = urllib.request.Request(page_url, headers={"User-Agent": "Mozilla/5.0 EyeGuard/" + APP_VERSION})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            final_url = r.geturl()
+            html = r.read(2 * 1024 * 1024).decode("utf-8", "replace")
+        match = re.search(r"/releases/tag/([^/?#]+)", final_url)
+        if not match:
+            match = re.search(r"/releases/tag/([^\"'/?#]+)", html)
+        if not match:
+            raise RuntimeError("GitHub did not redirect to a release tag")
+        tag = urllib.parse.unquote(match.group(1))
+        ver = tag.lstrip("vV")
+        if not ver:
+            raise RuntimeError("GitHub returned an empty release version")
+
+        # Try preferred names + common Setup patterns against the known tag.
+        candidates = list(UPDATE_ASSET_PREFERRED)
+        # Common naming used by the build / releases
+        candidates += [
+            "EyeGuard_Setup.exe",
+            "EyeGuard_Setup%s.exe" % ver,
+            "EyeGuard_Setupv%s.exe" % ver,
+            "EyeGuard_Setup_v%s.exe" % ver,
+            "EyeGuardSetup.exe",
+            "EyeGuard.exe",
+        ]
+        tag_path = urllib.parse.quote(tag, safe="")
+        last_err = None
+        for asset_name in candidates:
+            try:
+                url = "https://github.com/%s/releases/download/%s/%s" % (
+                    GITHUB_REPO, tag_path, urllib.parse.quote(asset_name))
+                head = urllib.request.Request(url, method="HEAD",
+                                              headers={"User-Agent": "EyeGuard/" + APP_VERSION})
+                with urllib.request.urlopen(head, timeout=8) as hr:
+                    if 200 <= getattr(hr, "status", 200) < 400:
+                        return {
+                            "version": ver, "tag": tag, "url": url,
+                            "asset_name": asset_name,
+                            "notes": "", "html_url": final_url,
+                        }
+            except Exception as e:
+                last_err = e
+                continue
+        raise RuntimeError("no suitable release asset for tag %s (%s)" % (tag, last_err))
+    except Exception as e:
+        page_error = "%s: %s" % (type(e).__name__, e)
+        log("GitHub releases page fallback failed: %s" % page_error)
+        raise RuntimeError("GitHub update check failed. API: %s. Releases page: %s" % (api_error, page_error))
 
 
-def download_update(url, dest_path):
+def download_update(url, dest_path, progress_cb=None):
+    """Download url to dest_path. progress_cb(downloaded_bytes, total_bytes_or_None) is optional."""
     req = urllib.request.Request(url, headers={"User-Agent": "EyeGuard/" + APP_VERSION})
     with urllib.request.urlopen(req, timeout=120) as r, open(dest_path, "wb") as out:
+        total = None
+        try:
+            total = int(r.headers.get("Content-Length") or 0) or None
+        except Exception:
+            total = None
+        done = 0
+        last_pct = -1
         while True:
             chunk = r.read(256 * 1024)
             if not chunk:
                 break
             out.write(chunk)
+            done += len(chunk)
+            if progress_cb:
+                if total and total > 0:
+                    pct = min(100, int(done * 100 / total))
+                    if pct != last_pct:
+                        last_pct = pct
+                        try:
+                            progress_cb(done, total)
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        progress_cb(done, None)
+                    except Exception:
+                        pass
+        if progress_cb:
+            try:
+                progress_cb(done, total or done)
+            except Exception:
+                pass
 
 
-def apply_update_and_restart(new_exe_path, version):
-    """Elevate a PowerShell helper, replace the installed EXE, then relaunch."""
+def apply_update_and_restart(new_exe_path, version, asset_name=""):
+    """Apply a downloaded update.
+    - Setup installer: launch elevated with --update (silent install + relaunch).
+    - Portable EXE: replace the running binary then relaunch.
+    """
     if not is_frozen():
         return False
 
+    new_abs = os.path.abspath(new_exe_path)
+    base = (asset_name or os.path.basename(new_abs)).lower()
+    is_setup = ("setup" in base)
+
+    if is_setup:
+        try:
+            # --update = silent install + start EyeGuard (handled in setup_ui.py)
+            result = ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", new_abs, "--update", None, 1)
+            ok = int(result) > 32
+            if not ok:
+                log("ShellExecuteW for setup --update returned %s" % result)
+            return ok
+        except Exception as e:
+            log("could not launch setup updater: %r" % (e,))
+            return False
+
+    # Portable / direct EXE replacement path
     current = os.path.abspath(sys.executable)
     helper = os.path.join(os.environ.get("TEMP") or os.path.dirname(current),
                           "EyeGuard_update.ps1")
@@ -460,8 +611,8 @@ $newFile = __NEWFILE__
 $processId = __PID__
 $version = __VERSION__
 try {
-    Wait-Process -Id $processId
-    Start-Sleep -Milliseconds 700
+    Wait-Process -Id $processId -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 900
     Copy-Item -LiteralPath $newFile -Destination $target -Force
     try {
         Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\EyeGuard' -Name DisplayVersion -Value $version -ErrorAction Stop
@@ -470,13 +621,14 @@ try {
     Remove-Item -LiteralPath $newFile -Force -ErrorAction SilentlyContinue
 } catch {
     $_ | Out-String | Set-Content -LiteralPath (Join-Path $env:TEMP 'EyeGuard_update_error.txt')
+    try { Start-Process -FilePath $target } catch {}
 }
 Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 """
     def ps_quote(value):
         return "'" + str(value).replace("'", "''") + "'"
     ps = (ps.replace('__TARGET__', ps_quote(current))
-            .replace('__NEWFILE__', ps_quote(os.path.abspath(new_exe_path)))
+            .replace('__NEWFILE__', ps_quote(new_abs))
             .replace('__PID__', str(pid))
             .replace('__VERSION__', ps_quote(version)))
     try:
@@ -2447,6 +2599,56 @@ class SettingsWindow:
         if self.update_spinner and self.update_spinner.winfo_exists():
             self.update_spinner.pack_forget()
 
+    def show_update_progress(self, pct):
+        """Show download percentage next to the check button."""
+        if not self.win.winfo_exists():
+            return
+        self.stop_update_spinner()
+        try:
+            self.update_check_btn.pack_forget()
+        except Exception:
+            pass
+        try:
+            self.update_restart_btn.pack_forget()
+        except Exception:
+            pass
+        self.update_progress_lbl.configure(text=T("update_downloading", int(pct)))
+        self.update_progress_lbl.pack(side="left", padx=(z(8), 0))
+
+    def show_update_ready(self):
+        """Download finished → hide progress, show Restart button."""
+        if not self.win.winfo_exists():
+            return
+        self.stop_update_spinner()
+        try:
+            self.update_progress_lbl.pack_forget()
+        except Exception:
+            pass
+        try:
+            self.update_check_btn.pack_forget()
+        except Exception:
+            pass
+        self.update_restart_btn.set_text(T("update_restart"))
+        self.update_restart_btn.pack(side="left")
+
+    def reset_update_controls(self):
+        """Back to the normal Check button."""
+        if not self.win.winfo_exists():
+            return
+        self.stop_update_spinner()
+        try:
+            self.update_progress_lbl.pack_forget()
+        except Exception:
+            pass
+        try:
+            self.update_restart_btn.pack_forget()
+        except Exception:
+            pass
+        try:
+            self.update_check_btn.pack(side="left")
+        except Exception:
+            pass
+
     def _on_configure(self, e):
         if e.widget is not self.win:
             return
@@ -2625,14 +2827,27 @@ class SettingsWindow:
         self._label(r, T("check_update") + "  V" + APP_VERSION)
         update_controls = tk.Frame(r, bg=CARD)
         update_controls.pack(side=self.side_end)
-        Pill(update_controls, T("check_update"), app.check_update_interactive, w=z(160), h=z(42), bg=CARD).pack(side="left")
+        self.update_check_btn = Pill(update_controls, T("check_update"), app.check_update_interactive,
+                                     w=z(160), h=z(42), bg=CARD)
+        self.update_check_btn.pack(side="left")
         self.update_spinner = tk.Canvas(update_controls, width=z(22), height=z(22), bg=CARD,
                                         highlightthickness=0, bd=0)
         self.update_spinner.pack(side="left", padx=(z(9), 0))
         self.update_spinner.pack_forget()
+        self.update_progress_lbl = tk.Label(update_controls, text="", bg=CARD, fg=MUTED,
+                                            font=FONT_SMALL)
+        self.update_progress_lbl.pack(side="left", padx=(z(8), 0))
+        self.update_progress_lbl.pack_forget()
+        self.update_restart_btn = Pill(update_controls, T("update_restart"),
+                                       app.apply_pending_update, w=z(150), h=z(42), bg=ACCENT, primary=True)
+        # kept hidden until download finishes
+        self.update_restart_btn.pack_forget()
 
         self._power_state = None
         self.sync_all()
+        # If a download already finished while settings were closed, show the restart button
+        if getattr(app, "_pending_update_path", None):
+            self.show_update_ready()
 
     def _logo_base(self):
         for name in ("logo.png", "app.ico"):
@@ -3046,6 +3261,9 @@ class App:
         threading.Thread(target=pin_tray_icon, daemon=True).start()
         self.last_window_ok = self.window_ok()
         self._update_busy = False
+        self._pending_update_path = None
+        self._pending_update_version = None
+        self._pending_update_asset = None
         self.refresh(force=True)
         self.root.after(250, self.poll)
         self.root.after(20, self.pump)
@@ -3273,9 +3491,16 @@ class App:
             if self.settings:
                 self.settings.stop_update_spinner()
             self._on_update_found(value)
+        elif kind == "update_progress":
+            if self.settings and self.settings.win.winfo_exists():
+                self.settings.show_update_progress(value.get("pct", 0))
+        elif kind == "update_ready":
+            self._on_update_ready(value)
         elif kind == "update_result":
             if self.settings:
                 self.settings.stop_update_spinner()
+                if not value.get("ok") and not value.get("latest"):
+                    self.settings.reset_update_controls()
             self._update_result(value)
         elif kind == "exit":
             self.quit()
@@ -3307,12 +3532,19 @@ class App:
             log("pending update note failed")
 
     def check_update_interactive(self):
+        if self._update_busy:
+            if self.settings and self.settings.win.winfo_exists():
+                self.settings.stop_update_spinner()
+            mb.showinfo(APP_NAME, T("update_checking"))
+            return
         if self.settings and self.settings.win.winfo_exists():
             self.settings.start_update_spinner()
         self.check_update(silent=False)
 
     def check_update(self, silent=False):
         if self._update_busy:
+            if not silent and self.settings and self.settings.win.winfo_exists():
+                self.settings.stop_update_spinner()
             return
         self._update_busy = True
 
@@ -3336,50 +3568,124 @@ class App:
         threading.Thread(target=work, daemon=True).start()
 
     def _on_update_found(self, payload):
-        """New version found → download and install automatically (no confirmation dialog)."""
+        """New version found → start download with progress; apply only after user restarts."""
         info = payload.get("info") or {}
         silent = bool(payload.get("silent"))
         if not is_frozen():
-            # Source run cannot replace itself; only tell the user when they asked manually
             if not silent:
                 mb.showinfo(APP_NAME, T("update_not_exe"))
                 url = info.get("html_url") or ("https://github.com/%s/releases" % GITHUB_REPO)
                 webbrowser.open(url)
             return
+        ver = str(info.get("version") or APP_VERSION)
         if not silent:
             try:
-                mb.showinfo(APP_NAME, T("update_started"))
+                mb.showinfo(APP_NAME, T("update_started", ver))
             except Exception:
                 pass
-        self._download_and_apply(info, silent=silent)
+        if self.settings and self.settings.win.winfo_exists():
+            self.settings.show_update_progress(0)
+        self._download_update_only(info, silent=silent)
 
-    def _download_and_apply(self, info, silent=True):
+    def _download_update_only(self, info, silent=True):
+        """Download the update and signal when it is ready (no auto-apply)."""
         self._update_busy = True
         ver = str(info.get("version") or APP_VERSION)
+        url = info.get("url") or ""
+        asset_name = str(info.get("asset_name") or "")
 
         def work():
             try:
-                # Remember to show "updated to X" on the next launch
-                self.cfg["pending_update_note"] = ver
-                save_config(self.cfg)
-                dest = os.path.join(os.environ.get("TEMP") or CONFIG_DIR,
-                                    "EyeGuard_%s.exe" % ver)
-                download_update(info["url"], dest)
-                if apply_update_and_restart(dest, ver):
-                    self.events.put(("exit", None))
+                # Keep "setup" in the temp filename when the asset is an installer
+                # so apply_update can detect it even if asset_name is lost.
+                if "setup" in asset_name.lower():
+                    dest_name = "EyeGuard_Setup_%s.exe" % ver
                 else:
-                    self.cfg["pending_update_note"] = ""
-                    save_config(self.cfg)
-                    self.events.put(("update_result", {"ok": False, "silent": silent, "error": "apply"}))
+                    dest_name = "EyeGuard_%s.exe" % ver
+                dest = os.path.join(os.environ.get("TEMP") or CONFIG_DIR, dest_name)
+                last_sent = [-1]
+
+                def on_progress(done, total):
+                    if total and total > 0:
+                        pct = min(100, int(done * 100 / total))
+                    else:
+                        pct = 0
+                    if pct != last_sent[0]:
+                        last_sent[0] = pct
+                        self.events.put(("update_progress", {"pct": pct, "silent": silent}))
+
+                download_update(url, dest, progress_cb=on_progress)
+                self.events.put(("update_ready", {
+                    "path": dest, "version": ver, "silent": silent,
+                    "asset_name": asset_name,
+                }))
             except Exception as e:
                 log("update download failed: %r" % (e,))
-                self.cfg["pending_update_note"] = ""
-                save_config(self.cfg)
                 self.events.put(("update_result", {"ok": False, "silent": silent, "error": str(e)}))
             finally:
                 self._update_busy = False
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _on_update_ready(self, payload):
+        """Download finished → store path and show Restart button / ask user."""
+        path = payload.get("path") or ""
+        ver = str(payload.get("version") or APP_VERSION)
+        silent = bool(payload.get("silent"))
+        asset_name = str(payload.get("asset_name") or "")
+        if not path or not os.path.isfile(path):
+            self.events.put(("update_result", {"ok": False, "silent": silent, "error": "download missing"}))
+            return
+        self._pending_update_path = path
+        self._pending_update_version = ver
+        self._pending_update_asset = asset_name
+        # Remember so next launch can say "updated to X" after apply
+        self.cfg["pending_update_note"] = ver
+        save_config(self.cfg)
+
+        if self.settings and self.settings.win.winfo_exists():
+            self.settings.show_update_ready()
+            return
+
+        # Settings closed: ask once whether to restart now
+        try:
+            if mb.askyesno(APP_NAME, T("update_restart_q", ver)):
+                self.apply_pending_update()
+        except Exception:
+            log("update ready dialog failed")
+
+    def apply_pending_update(self):
+        """User clicked Restart → apply the downloaded update and exit."""
+        path = getattr(self, "_pending_update_path", None)
+        ver = getattr(self, "_pending_update_version", None) or APP_VERSION
+        asset_name = getattr(self, "_pending_update_asset", None) or ""
+        if not path or not os.path.isfile(path):
+            if self.settings and self.settings.win.winfo_exists():
+                self.settings.reset_update_controls()
+            mb.showerror(APP_NAME, T("update_apply_fail"))
+            return
+        self._update_busy = True
+        try:
+            if apply_update_and_restart(path, ver, asset_name=asset_name):
+                # Give the elevated process a moment to start, then exit so files unlock.
+                self.root.after(400, lambda: self.events.put(("exit", None)))
+            else:
+                self.cfg["pending_update_note"] = ""
+                save_config(self.cfg)
+                self._pending_update_path = None
+                if self.settings and self.settings.win.winfo_exists():
+                    self.settings.reset_update_controls()
+                mb.showerror(APP_NAME, T("update_apply_fail"))
+        except Exception as e:
+            log("apply pending update failed: %r" % (e,))
+            self.cfg["pending_update_note"] = ""
+            save_config(self.cfg)
+            self._pending_update_path = None
+            if self.settings and self.settings.win.winfo_exists():
+                self.settings.reset_update_controls()
+            mb.showerror(APP_NAME, T("update_apply_fail") + "\n\n" + str(e)[:400])
+        finally:
+            self._update_busy = False
 
     def _update_result(self, payload):
         if payload.get("silent"):
@@ -3391,7 +3697,8 @@ class App:
             if err == "apply":
                 mb.showerror(APP_NAME, T("update_apply_fail"))
             else:
-                mb.showerror(APP_NAME, T("update_fail"))
+                detail = str(err or "Unknown error")
+                mb.showerror(APP_NAME, T("update_fail") + "\n\n" + detail[:700])
 
     def toggle_pause_app(self, exe):
         """Add or remove an exe from the pause-while-using list."""
