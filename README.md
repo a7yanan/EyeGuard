@@ -1,34 +1,22 @@
 # EyeGuard
 
-يحمي عينك من ضوء الشاشة (فلتر ألوان دافئ + تذكير بتحريك العين).
+A lightweight Windows application designed to help reduce eye strain during screen use.
 
-## التشغيل من المصدر
-```bat
-run.bat
-```
+### Features
+- Warm screen color filter to reduce harsh blue light.
+- Eye movement reminders to encourage regular eye breaks.
+- Simple and easy-to-use interface.
+- System tray support.
 
-## بناء ملف تنفيذي
-```bat
-build.bat
-```
-ينتج:
-- `dist\EyeGuard.exe` — البرنامج
-- `dist\EyeGuard_Setup.exe` — المثبت
+### Download
 
-## التحديث التلقائي (GitHub Releases)
+Download the latest version from the [Releases](https://github.com/a7yanan/EyeGuard/releases/latest) page.
 
-المستودع المستخدم: https://github.com/a7yanan/EyeGuard
+Run `EyeGuard_Setup.exe` to install the application.
 
-1. ابنِ المشروع باستخدام `build.bat`.
-2. ارفع `dist\EyeGuard_Setup.exe` كملف التثبيت للمستخدمين الجدد.
-3. ارفع `dist\EyeGuard.portable.exe` كملف التحديث التلقائي. (ملف مستقل للبرنامج، وليس المثبّت).
-4. أنشئ Release جديدًا بالوسم `vX.Y.Z`، واجعل رقم `APP_VERSION` في `eyeguard.py` و`setup_ui.py` مطابقًا له.
-5. أرفق الملفين بالاسمين نفسهما في كل إصدار.
+### Requirements
+- Windows 10 or Windows 11.
 
-البرنامج بيفحص أحدث إصدار منشور من GitHub مرة كل 24 ساعة، ويمكن بدء الفحص يدويًا من الإعدادات. لو فيه إصدار أحدث، بينزّل `EyeGuard.portable.exe` ويستبدل نسخة البرنامج بعد إغلاقها. لو البرنامج مثبت داخل `Program Files`، هيطلب موافقة Windows على صلاحيات المسؤول لإتمام الاستبدال.
+---
 
-> ملف `EyeGuard_Setup.exe` مخصص للتثبيت الأول أو إعادة التثبيت يدويًا، أما التحديث التلقائي فيستخدم `EyeGuard.portable.exe`.
-
-## المتطلبات
-- Windows 10/11
-- Python 3 + Pillow (للتطوير والبناء)
+**EyeGuard — Made for comfortable screen time.**
